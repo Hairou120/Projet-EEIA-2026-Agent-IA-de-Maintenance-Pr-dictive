@@ -1,64 +1,44 @@
-import os
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-
-# Importation des schémas Pydantic
 from backend.schemas import QueryData, ChatResponse
-# Importation du service RAG développé à l'étape 2
 from backend.rag_service import get_rag_service
 
-# -----------------------------------------------------------------------------
-# INITIALISATION DE L'APPLICATION FASTAPI
-# -----------------------------------------------------------------------------
+'''Serveur FastAPI qui transforme le service RAG en API web réutilisable
+par l'interface graphique.'''
+
+# Initialisation de l'application FastAPI
 app = FastAPI(
-    title="API Maintenance Prédictive & Assistant RAG",
-    description="Backend FastAPI fournissant l'assistance technique RAG basée sur la documentation PDF.",
+    title="API RAG Maintenance Prédictive",
+    description="API d'assistance technique locale via Ollama",
     version="1.0.0"
 )
 
-# Configuration CORS (permet les requêtes depuis le frontend Streamlit)
+# Configuration CORS pour autoriser l'interface Streamlit (Web) à communiquer avec l'API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En production, restreindre aux URL autorisées
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],        # Autorise toutes les origines
+    allow_credentials=True,     # Autorise l'envoi de cookies/headers authentifiés
+    allow_methods=["*"],        # Autorise toutes les méthodes HTTP (GET, POST, etc.)
+    allow_headers=["*"],        # Autorise tous les entêtes
 )
 
-
-# -----------------------------------------------------------------------------
-# ENDPOINTS / ROUTES HTTP
-# -----------------------------------------------------------------------------
+# Endpoint de vérification de l'état de l'API (Healthcheck)
 @app.get("/health", tags=["Santé"])
 def health_check():
-    """Vérifie que l'API est en ligne."""
     return {"status": "online", "message": "API RAG opérationnelle"}
 
-
+# Endpoint principal du Chat : reçoit la question et renvoie la réponse
 @app.post("/chat", response_model=ChatResponse, tags=["Assistant RAG"])
-def chat_endpoint(query: QueryData):
-    """
-    Endpoint principal pour l'assistant RAG :
-    1. Reçoit la question du technicien.
-    2. Interroge le service RAG (FAISS + Groq LLM).
-    3. Renvoie la réponse formatée et les références de sources.
-    """
+def chat_endpoint(payload: QueryData):
     try:
-        # Récupération de l'instance du service RAG
+        # Récupération de l'instance RAG
         rag_service = get_rag_service()
-        
-        # Exécution de la chaîne RAG
-        result = rag_service.answer_question(query.question)
-        
+        # Traitement de la question et génération de la réponse
+        result = rag_service.answer_question(payload.question)
         return result
-
-    except FileNotFoundError as fnf_err:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=str(fnf_err)
-        )
     except Exception as e:
+        # En cas d'erreur interne, renvoie un code HTTP 500
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Erreur interne du serveur RAG : {str(e)}"
+            detail=f"Erreur interne RAG : {str(e)}"
         )

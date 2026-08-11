@@ -1,75 +1,45 @@
-import os
 import sys
+import os
 
-# Ajout du dossier racine du projet au système d'importation Python
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if BASE_DIR not in sys.path:
-    sys.path.append(BASE_DIR)
+'''Script de test en ligne de commande pour interroger l'assistant RAG 
+directement dans le terminal.'''
+
+
+
+# Ajout du dossier parent au système de modules Python pour permettre l'importation de 'backend'
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.rag_service import get_rag_service
 
 
-def main():
-    print("=" * 65)
-    print("🧪 TEST INTERACTIF DU SERVICE RAG (SANS FASTAPI)")
-    print("=" * 65)
-
-    # 1. Initialisation du service RAG
+def test_cli():
+    print("=== TEST INTERACTIF DU MODULE RAG (OLLAMA / LLAMA3.2) ===")
     try:
-        print("\n⏳ Chargement du service RAG (FAISS + Embeddings + Groq)...")
-        rag_service = get_rag_service()
-        print("✅ Service RAG chargé avec succès !\n")
+        # Initialisation du service
+        rag = get_rag_service()
     except Exception as e:
-        print(f"❌ Erreur critique lors de l'initialisation : {e}")
-        print("💡 Vérifiez que :")
-        print("   1. Le fichier '.env' contient bien votre GROQ_API_KEY.")
-        print("   2. L'index FAISS existe dans 'vectorstore/faiss_index' (exécutez 'python scripts/build_vectorstore.py').")
-        sys.exit(1)
+        print(f"❌ Erreur lors du chargement : {e}")
+        return
 
-    print(" tapez votre question ci-dessous (ou 'q' / 'exit' pour quitter).\n")
-
-    # 2. Boucle d'interaction en ligne de commande
+    # Boucle d'interaction infinie jusqu'à la saisie de 'q'
     while True:
-        try:
-            user_query = input("🗣️  Votre question : ").strip()
-
-            # Conditions de sortie
-            if user_query.lower() in ["q", "exit", "quit", ""]:
-                print("\n👋 Fermeture du test RAG. À bientôt !")
-                break
-
-            print("\n🔍 Extraction FAISS & Génération de la réponse via Groq...")
-            
-            # Appel direct à la méthode du service RAG
-            result = rag_service.answer_question(user_query)
-
-            # Affichage de la réponse du LLM
-            print("\n" + "─" * 65)
-            print("🤖 RÉPONSE DE L'ASSISTANT RAG :")
-            print("─" * 65)
-            print(result["answer"])
-
-            # Affichage des sources consultées
-            print("\n" + "─" * 65)
-            print("📚 SOURCES EXTRAITES DU MANUEL TECHNIQUE :")
-            print("─" * 65)
-            
-            sources = result.get("sources", [])
-            if sources:
-                for src in sources:
-                    print(f"• [Extrait #{src['id']}] - Page {src['page']}")
-                    print(f"  Aperçu : \"{src['content_preview']}\"\n")
-            else:
-                print("  Aucune source spécifique extraite.\n")
-
-            print("=" * 65 + "\n")
-
-        except KeyboardInterrupt:
-            print("\n\n👋 Interruption par l'utilisateur. Quitter.")
+        q = input("\n🗣️ Votre question (ou 'q' pour quitter) : ").strip()
+        if q.lower() == 'q':
+            print("👋 Fermeture du test.")
             break
-        except Exception as e:
-            print(f"\n❌ Une erreur est survenue lors du traitement : {e}\n")
+        if not q:
+            continue
+        
+        print("⌛ Recherche et génération en cours...")
+        # Appel du service RAG
+        res = rag.answer_question(q)
+        
+        # Affichage du résultat
+        print(f"\n💡 Réponse :\n{res['answer']}")
+        print("\n📌 Sources :")
+        for s in res['sources']:
+            print(f"  - Page {s['page']} : {s['content_preview']}")
 
 
 if __name__ == "__main__":
-    main()
+    test_cli()

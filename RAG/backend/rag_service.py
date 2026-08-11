@@ -1,147 +1,139 @@
 import os
-from typing import Dict, List, Any
-from dotenv import load_dotenv
-
-# Chargement des variables d'environnement (ex: GROQ_API_KEY)
-load_dotenv()
-
-# Importations LangChain modernisées
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_ollama import ChatOllama
+from langchain_core.prompts import PromptTemplate
 
+'''Le cœur de l'assistant RAG. Il gère :
 
-# -----------------------------------------------------------------------------
-# 1. CONFIGURATION DES CHEMINS ET MODÈLES
-# -----------------------------------------------------------------------------
+La détection des intentions (salutations, identité, questions courtes).
+
+La recherche des passages correspondants dans la base FAISS.
+
+La formulation du prompt et l'appel au modèle local Ollama (Llama 3.2).'''
+
+# Configuration des chemins d'accès
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VECTORSTORE_PATH = os.path.join(BASE_DIR, "vectorstore", "faiss_index")
 
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-GROQ_MODEL_NAME = "llama-3.1-8b-instant"
+# Prompt Système strict pour forcer l'ancrage documentaire
+PROMPT_TEMPLATE = """Vous êtes un expert technique en maintenance industrielle.
+Répondez à la question en vous appuyant UNIQUEMENT sur le contexte extrait du manuel ci-dessous.
+Si l'information n'est pas présente dans le contexte, répondez exactement : "Je ne trouve pas cette information dans le manuel technique."
+
+CONTEXTE DU MANUEL :
+{context}
+
+QUESTION :
+{question}
+
+RÉPONSE DÉTAILLÉE :"""
 
 
-# -----------------------------------------------------------------------------
-# 2. CLASSE DU SERVICE RAG
-# -----------------------------------------------------------------------------
 class RAGService:
     def __init__(self):
-        """
-        Initialise le service RAG :
-        1. Charge le modèle d'embeddings.
-        2. Charge la base vectorielle FAISS depuis le disque.
-        3. Initialise le client LLM (Groq API).
-        """
-        print("⚡ Initialisation du service RAG...")
-
-        # A. Modèle d'embeddings (identique à celui utilisé lors de la vectorisation)
+        print("🔄 Chargement des embeddings et de l'index FAISS...")
+        
+        # 1. Chargement du modèle d'embeddings HuggingFace
         self.embeddings = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL_NAME,
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
-
-        # B. Chargement de l'index FAISS
+        
+        # 2. Vérification de l'existence de la base vectorielle FAISS
         if not os.path.exists(VECTORSTORE_PATH):
             raise FileNotFoundError(
-                f"❌ L'index FAISS est introuvable dans '{VECTORSTORE_PATH}'. "
-                "Exécutez d'abord le script 'scripts/build_vectorstore.py'."
+                f"❌ Index FAISS introuvable sous {VECTORSTORE_PATH}. "
+                "Exécutez d'abord 'python scripts/build_vectorstore.py'."
             )
-
+            
+        # 3. Chargement de l'index FAISS local
         self.vectorstore = FAISS.load_local(
             VECTORSTORE_PATH,
             self.embeddings,
-            allow_dangerous_deserialization=True  # Requis pour charger un fichier pkl local
+            allow_dangerous_deserialization=True
         )
-
-        # Configuration du retriever (extrait les 3 segments les plus pertinents)
-        self.retriever = self.vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 3}
+        
+        # 4. Connexion au LLM local Ollama (Llama 3.2)
+        self.llm = ChatOllama(
+            model="llama3.2",
+            temperature=0.1
         )
-
-        # C. Initialisation du LLM via Groq API
-        groq_api_key = os.getenv("GROQ_API_KEY")
-        if not groq_api_key:
-            print("⚠️ Avertissement : GROQ_API_KEY n'est pas définie dans le fichier .env.")
-
-        self.llm = ChatGroq(
-            model_name=GROQ_MODEL_NAME,
-            temperature=0.2,  # Température basse pour privilégier la précision technique
-            groq_api_key=groq_api_key
+        
+        # 5. Création du template de prompt
+        self.prompt = PromptTemplate(
+            template=PROMPT_TEMPLATE,
+            input_variables=["context", "question"]
         )
+        print("✅ Service RAG Ollama (Llama 3.2) initialisé avec succès !")
 
-        # D. Template du Prompt Augmenté
-        self.prompt_template = ChatPromptTemplate.from_messages([
-            ("system", 
-             "Vous êtes un expert technique spécialisé dans la maintenance industrielle et l'assistance technique.\n"
-             "Répondez à la question de l'utilisateur de manière claire, rigoureuse et structurée, "
-             "en vous appuyant **exclusivement** sur le contexte fourni ci-dessous (issu du manuel technique).\n\n"
-             "Consignes :\n"
-             "1. Si le contexte ne contient pas l'information demandée, indiquez clairement que le manuel ne le précise pas.\n"
-             "2. Si la question concerne une panne ou une alerte, indiquez les étapes de dépannage recommandées.\n"
-             "3. Soignez la présentation avec des listes à puces si nécessaire.\n\n"
-             "--- CONTEXTE DU MANUEL TECHNIQUE ---\n"
-             "{context}\n"
-             "------------------------------------"
-            ),
-            ("human", "{question}")
-        ])
+    def answer_question(self, question: str) -> dict:
+        clean_q = question.strip().lower()
+        
+        # --- FILTRE 1 : Salutations ---
+        greetings = ["bonjour", "bonsoir", "salut", "hello", "coucou", "hi"]
+        if clean_q in greetings:
+            return {
+                "answer": "Bonjour ! Je suis votre assistant technique en maintenance prédictive. Posez-moi une question sur le manuel d'utilisation de votre équipement.",
+                "sources": []
+            }
 
-        print("✅ Service RAG prêt à recevoir des requêtes.")
+        # --- FILTRE 2 : Remerciements et Clôture ---
+        thanks = ["merci", "merci beaucoup", "super merci", "c'est parfait", "au revoir", "bye"]
+        if clean_q in thanks:
+            return {
+                "answer": "Je vous en prie ! N'hésitez pas si vous avez d'autres questions sur le manuel technique.",
+                "sources": []
+            }
 
-    # -------------------------------------------------------------------------
-    # 3. MÉTHODE D'INFERENCE (MOTEUR DE RECHERCHE + GÉNÉRATION)
-    # -------------------------------------------------------------------------
-    def answer_question(self, question: str) -> Dict[str, Any]:
-        """
-        Exécute la chaîne RAG complète :
-        1. Recherche des chunks pertinents dans FAISS.
-        2. Formatage du contexte.
-        3. Envoi du prompt au LLM.
-        4. Extrait la réponse et les références de sources (pages).
-        """
-        # Étape 1 : Recherche vectorielle des k documents les plus proches
-        retrieved_docs = self.retriever.invoke(question)
+        # --- FILTRE 3 : Identité & Rôle ---
+        identity_queries = ["qui es-tu", "qui es tu", "tu es qui", "que peux-tu faire", "comment tu t'appelles", "a quoi tu sers"]
+        if any(query in clean_q for query in identity_queries):
+            return {
+                "answer": "Je suis un assistant virtuel de maintenance industrielle. Je suis conçu pour répondre à vos questions techniques à partir du manuel d'utilisation de vos équipements.",
+                "sources": []
+            }
 
-        # Étape 2 : Construction du contexte textuel et extraction des sources
-        context_parts = []
+        # --- FILTRE 4 : Requêtes très courtes ---
+        if len(clean_q) < 3:
+            return {
+                "answer": "Votre question semble très courte. Veuillez formuler une phrase ou préciser le composant concerné.",
+                "sources": []
+            }
+
+        # --- PIPELINE RAG (Recherche FAISS sans filtrage par score + Ollama) ---
+        # 1. Recherche des 3 passages les plus proches dans FAISS
+        docs = self.vectorstore.similarity_search(question, k=3)
+        
+        # 2. Assemblage des extraits en un seul bloc de contexte
+        context_text = "\n\n".join([doc.page_content for doc in docs])
+        
+        # 3. Formatage du prompt et génération de la réponse par Llama 3.2
+        formatted_prompt = self.prompt.format(context=context_text, question=question)
+        response = self.llm.invoke(formatted_prompt)
+        answer_content = response.content if hasattr(response, "content") else str(response)
+        
+        # 4. Structuration des sources (Fichier PDF source + Numéro de Page)
         sources = []
-
-        for i, doc in enumerate(retrieved_docs, start=1):
-            page_num = doc.metadata.get("page", "Inconnue")
-            source_content = doc.page_content.strip()
-
-            context_parts.append(f"[Extrait {i} - Page {page_num}]\n{source_content}")
+        for doc in docs:
+            page = doc.metadata.get("page", doc.metadata.get("page_number", 0)) + 1
+            filename = doc.metadata.get("source_file", os.path.basename(doc.metadata.get("source", "Manuel")))
             sources.append({
-                "id": i,
-                "page": page_num,
-                "content_preview": source_content[:150] + "..."  # Aperçu du texte
+                "file": filename,
+                "page": page,
+                "content_preview": doc.page_content[:150] + "..."
             })
-
-        formatted_context = "\n\n".join(context_parts)
-
-        # Étape 3 : Assemblage du Prompt et Appel du LLM
-        prompt_messages = self.prompt_template.format_messages(
-            context=formatted_context,
-            question=question
-        )
-
-        response = self.llm.invoke(prompt_messages)
-
-        # Étape 4 : Structuration du résultat
+            
         return {
-            "answer": response.content,
+            "answer": answer_content,
             "sources": sources
         }
 
 
-# Instanciation d'un singleton pour réutilisation dans FastAPI
-rag_service_instance = None
+# Pattern Singleton
+_rag_service_instance = None
 
 def get_rag_service() -> RAGService:
-    global rag_service_instance
-    if rag_service_instance is None:
-        rag_service_instance = RAGService()
-    return rag_service_instance
+    global _rag_service_instance
+    if _rag_service_instance is None:
+        _rag_service_instance = RAGService()
+    return _rag_service_instance

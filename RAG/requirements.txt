@@ -1,11 +1,10 @@
 fastapi
 uvicorn
 pydantic
-python-dotenv
 langchain
 langchain-community
+langchain-ollama
 langchain-huggingface
-langchain-groq
 faiss-cpu
-pypdf
 sentence-transformers
+pypdf
